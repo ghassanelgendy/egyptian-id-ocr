@@ -99,33 +99,56 @@ def generate_synthetic_image(text, output_path):
         
     cv2.imwrite(output_path, img_cv)
 
+def generate_random_sequence(length=4):
+    letters = "ابتثجحخدذرزسشصضطظعغفقكلمنهويءآأؤإةى"
+    return "".join(random.choice(letters) for _ in range(length))
+
+def generate_confusing_sequence():
+    # Explicitly combine confusing pairs in start, middle, and end positions
+    confusing_groups = [
+        ["ب", "ي", "ت", "ث", "ن"],  # Similar shape, different dots underneath/above
+        ["ر", "ز", "و", "د", "ذ"],  # Similar body curves, dot vs no dot, loop vs no loop
+        ["ج", "ح", "خ", "ع", "غ"]   # Similar shapes, dot vs no dot
+    ]
+    group = random.choice(confusing_groups)
+    length = random.randint(3, 5)
+    return "".join(random.choice(group) for _ in range(length))
+
 def main():
     os.makedirs("dataset/images", exist_ok=True)
     labels_file = "dataset/labels.txt"
     
-    print("Generating synthetic Arabic text dataset...")
+    print("Generating enhanced synthetic Arabic dataset with positional shapes & confusing pairs...")
     count = 0
+    samples = []
+    
+    # 1. Add standard vocabulary words
+    for word in WORDS:
+        samples.append(word)
+        # Add a two-word phrase
+        samples.append(f"{word} {random.choice(WORDS)}")
+        
+    # 2. Add random character sequences (positional shape learning)
+    for _ in range(400):
+        length = random.randint(3, 6)
+        samples.append(generate_random_sequence(length))
+        
+    # 3. Add explicit confusing pairs (learning distinction between ر/ز/و and ب/ي/ت)
+    for _ in range(400):
+        samples.append(generate_confusing_sequence())
+        
+    # Generate and save all images
     with open(labels_file, "w", encoding="utf-8") as f:
-        # Generate single-word names and combinations
-        for idx, word in enumerate(WORDS):
-            # Single words
+        for text in samples:
             img_name = f"img_{count}.png"
             img_path = os.path.join("dataset/images", img_name)
-            generate_synthetic_image(word, img_path)
-            f.write(f"{img_name}\t{word}\n")
-            count += 1
-            
-            # Name pairs (e.g. "أحمد محمد")
-            for _ in range(3):
-                word2 = random.choice(WORDS)
-                if word != word2:
-                    phrase = f"{word} {word2}"
-                    img_name = f"img_{count}.png"
-                    img_path = os.path.join("dataset/images", img_name)
-                    generate_synthetic_image(phrase, img_path)
-                    f.write(f"{img_name}\t{phrase}\n")
-                    count += 1
-                    
+            try:
+                generate_synthetic_image(text, img_path)
+                f.write(f"{img_name}\t{text}\n")
+                count += 1
+            except Exception:
+                continue
+                
     print(f"Dataset generated successfully! Created {count} images in dataset/images/ and labels.txt.")
 
 if __name__ == "__main__":
