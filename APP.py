@@ -27,6 +27,16 @@ if st.session_state.current_tab == "Home":
     if not uploaded_file:
         st.image("ocr2.png", use_container_width=True)
     else:
+        # Clean old visual crops from output folder to avoid showing stale data
+        import shutil
+        if os.path.exists("output"):
+            for f in os.listdir("output"):
+                if f.endswith(".jpg"):
+                    try:
+                        os.remove(os.path.join("output", f))
+                    except Exception:
+                        pass
+        
         # If a file is uploaded, process it
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp_file:
             temp_file.write(uploaded_file.read())
@@ -40,7 +50,53 @@ if st.session_state.current_tab == "Home":
         try:
             # Call the detect_and_process_id_card function
             first_name, second_name, Full_name, national_id, address, birth, gov, gender = detect_and_process_id_card(temp_file_path)
-            st.image(Image.open("d2.jpg"), use_container_width=True)
+            
+            # Show the cropped card image detected by YOLO
+            st.image(Image.open("d2.jpg"), caption="Cropped Card Bounding Box", use_container_width=True)
+            
+            st.markdown("---")
+            
+            # 🔍 Interactive Preprocessing Pipeline Expander
+            with st.expander("🔍 Show Image Preprocessing & Sauvola Phases", expanded=True):
+                st.markdown("### Preprocessing Pipeline Visualization")
+                st.markdown("Compare the original crops with our adaptive Sauvola binarization + edge-softening filters.")
+                
+                # Check and display firstName
+                if os.path.exists("output/firstName_raw.jpg") and os.path.exists("output/firstName_processed.jpg"):
+                    st.markdown("#### 1. First Name Field (`firstName`)")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.image("output/firstName_raw.jpg", caption="Original Crop", use_container_width=True)
+                    with col2:
+                        st.image("output/firstName_processed.jpg", caption="Sauvola Preprocessed (Grayscale Blend + Softening)", use_container_width=True)
+                
+                # Check and display lastName
+                if os.path.exists("output/lastName_raw.jpg") and os.path.exists("output/lastName_processed.jpg"):
+                    st.markdown("#### 2. Last Name Field (`lastName`)")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.image("output/lastName_raw.jpg", caption="Original Crop", use_container_width=True)
+                    with col2:
+                        st.image("output/lastName_processed.jpg", caption="Sauvola Preprocessed (Grayscale Blend + Softening)", use_container_width=True)
+                
+                # Check and display address
+                if os.path.exists("output/address_raw.jpg") and os.path.exists("output/address_processed.jpg"):
+                    st.markdown("#### 3. Address Field (`address`)")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.image("output/address_raw.jpg", caption="Original Crop", use_container_width=True)
+                    with col2:
+                        st.image("output/address_processed.jpg", caption="Sauvola Preprocessed (Grayscale Blend + Softening)", use_container_width=True)
+
+                # Check and display NID
+                if os.path.exists("output/nid_raw.jpg"):
+                    st.markdown("#### 4. National ID Number Field (`nid`)")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.image("output/nid_raw.jpg", caption="Original Crop", use_container_width=True)
+                    with col2:
+                        st.write("Digits extraction is directly processed using YOLO Digit Sweep (conf 0.25 -> 0.05).")
+
             st.markdown("---")
             st.markdown(" ## WORDS EXTRACTED : ")
             st.write(f"First Name: {first_name}")
@@ -93,5 +149,5 @@ elif st.session_state.current_tab == "Guide":
     - Upload an Egyptian ID card image.
     - View the extracted information and analysis.
         
-    ## هI HOPE YOU ENJOY THE EXPERIENCE 💖
+    ## HOPE YOU ENJOY THE EXPERIENCE 💖
     """)

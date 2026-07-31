@@ -4,6 +4,7 @@ import cv2
 import re
 import easyocr
 import numpy as np
+import os
 
 # Initialize EasyOCR reader (this should be done once for efficiency)
 reader = easyocr.Reader(['ar'], gpu=False)
@@ -39,7 +40,7 @@ COMMON_ARABIC_NAMES = {
     "عبدالقوى", "عبدالهادي", "سيد", "صبري", "صبرى", "شوقي", "شوقى", "لطفي", "لطفى", "فهمي", "فهمى", "حلمي", "حلمى", 
     "رمزي", "رمزى", "نجيب", "منير", "سمير", "نبيل", "جميل", "جلال", "كرم", "مراد", "ماجد", "وجدي", "وجدى", "وحيد", 
     "ظافر", "شفيق", "رفيق", "صبحي", "صبخى", "طاهر", "طلعت", "عاطف", "عقيل", "عمران", "عوض", "عيسى", "غالي", "غالى", 
-    "غريب", "faiy", "فايز", "فاروق", "فضل", "فيصل", "قاسم", "قطب", "كامل", "متولي", "metwally", "متولى", "محسن", "محفوظ", "مختار", "مروان", 
+    "غريب", "faiy", "فايز", "فاروق", "فضل", "فيصل", "قاسم", "قطب", "كامل", "metwally", "متولي", "متولى", "محسن", "محفوظ", "مختار", "مروان", 
     "مظهر", "معتز", "معوض", "منصور", "مهدي", "مهدى", "ناصف", "نصار", "نصر", "نعمان", "نعيم", "نهاد", "نور", "هادي", 
     # Female names
     "فاطمة", "فاطمه", "عائشة", "عائشه", "خديجة", "خديجه", "زينب", "رقية", "رقيه", "مريم", "سارة", "sara", "ساره", "منى", "منة", "منه",
@@ -176,12 +177,21 @@ def sort_arabic_ocr_results(results):
 def preprocess_image(cropped_image):
     return dynamic_ocr_preprocess(cropped_image)
 
-def extract_text(image, bbox, lang='ara'):
+def extract_text(image, bbox, field_name):
     x1, y1, x2, y2 = bbox
     cropped_image = image[y1:y2, x1:x2]
     if cropped_image.size == 0:
         return ""
+        
+    # Save raw crop for Streamlit visualization
+    os.makedirs('output', exist_ok=True)
+    cv2.imwrite(f'output/{field_name}_raw.jpg', cropped_image)
+    
     preprocessed_image = preprocess_image(cropped_image)
+    
+    # Save preprocessed/binarized crop for Streamlit visualization
+    cv2.imwrite(f'output/{field_name}_processed.jpg', preprocessed_image)
+    
     results = reader.readtext(
         preprocessed_image, 
         detail=1, 
@@ -316,18 +326,21 @@ def process_image(cropped_image):
             bbox = [int(coord) for coord in bbox]
 
             if class_name == 'firstName':
-                first_name = extract_text(cropped_image, bbox, lang='ara')
+                first_name = extract_text(cropped_image, bbox, 'firstName')
                 first_name = autocorrect_arabic_name(first_name)
             elif class_name == 'lastName':
-                second_name = extract_text(cropped_image, bbox, lang='ara')
+                second_name = extract_text(cropped_image, bbox, 'lastName')
                 second_name = autocorrect_arabic_name(second_name)
             elif class_name == 'serial':
-                serial = extract_text(cropped_image, bbox, lang='eng')
+                serial = extract_text(cropped_image, bbox, 'serial')
             elif class_name == 'address':
-                address = extract_text(cropped_image, bbox, lang='ara')
+                address = extract_text(cropped_image, bbox, 'address')
             elif class_name == 'nid':
                 expanded_bbox = expand_bbox_height(bbox, scale=1.5, image_shape=cropped_image.shape)
                 cropped_nid = cropped_image[expanded_bbox[1]:expanded_bbox[3], expanded_bbox[0]:expanded_bbox[2]]
+                # Save raw NID crop for Streamlit visualization
+                os.makedirs('output', exist_ok=True)
+                cv2.imwrite('output/nid_raw.jpg', cropped_nid)
                 nid = detect_national_id(cropped_nid)
 
     merged_name = f"{first_name} {second_name}".strip()
