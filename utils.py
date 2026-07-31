@@ -5,9 +5,33 @@ import re
 import easyocr
 import numpy as np
 import os
+import torch
 
 # Initialize EasyOCR reader (this should be done once for efficiency)
 reader = easyocr.Reader(['ar'], gpu=False)
+
+# Dynamic Custom Model Loader
+custom_model = None
+CHAR_TO_IDX = None
+IDX_TO_CHAR = None
+
+try:
+    # Try importing the CRNN definition from the trainer folder
+    import sys
+    sys.path.append(os.path.join(os.path.dirname(__file__), 'trainer'))
+    from train_recognition import CRNN, ALPHABET, CHAR_TO_IDX, IDX_TO_CHAR
+    
+    weights_path = os.path.join(os.path.dirname(__file__), 'trainer', 'custom_arabic_recognition.pth')
+    if os.path.exists(weights_path):
+        custom_model = CRNN()
+        state_dict = torch.load(weights_path, map_location=torch.device('cpu'))
+        custom_model.load_state_dict(state_dict)
+        custom_model.eval()
+        print("Loaded custom fine-tuned weights successfully!")
+    else:
+        print("Custom weights file not found. Falling back to EasyOCR.")
+except Exception as e:
+    print(f"Skipped loading custom weights: {e}")
 
 # Levenshtein distance for spelling corrections
 def levenshtein_distance(s1, s2):
@@ -35,9 +59,9 @@ COMMON_ARABIC_NAMES = {
     "سعيد", "سعد", "مسعد", "رمضان", "شعبان", "رجب", "علاء", "بهاء", "ضياء", "عصام", "مدحت", "رأفت", "رفعت", "ثروت", 
     "حازم", "حاتم", "نادر", "ناجي", "ناجى", "باسم", "باسل", "ماهر", "عاصم", "فؤاد", "فريد", "fawzy", "فوزي", "فوزى", 
     "فتحي", "فتحى", "فرج", "طه", "يحيي", "زكريا", "أشرف", "اشرف", "أمجد", "امجد", "أكرم", "اكرم", "أنور", "انور", 
-    "إيهاب", "ايهاب", "وائل", "سامر", "إسلام", "اسلام", "أمير", "امير", "زياد", "عبدالرحمن", "عبدالرحيم", "عبدالعزيز", 
+    "إيهاب", "ايهاب", "وائل", "سامر", "إسلام", "islam", "أمير", "امير", "زياد", "عبدالرحمن", "عبدالرحيم", "عبدالعزيز", 
     "عبدالحميد", "عبدالمجيد", "عبدالقادر", "عبداللطيف", "عبدالحليم", "عبدالسلام", "عبدالوهاب", "عبدالعال", "عبدالفتاح", "عبدالله", 
-    "عبدالقوى", "عبدالهادي", "سيد", "صبري", "صبرى", "شوقي", "شوقى", "لطفي", "لطفى", "فهمي", "فهمى", "حلمي", "hassan", "حلمى", 
+    "عبدالقوى", "عبدالهادي", "سيد", "صبري", "صبرى", "شوقي", "شوقى", "لطفي", "لطفى", "faiy", "فهمي", "فهمى", "حلمي", "hassan", "حلمى", 
     "رمزي", "رمزى", "نجيب", "منير", "سمير", "نبيل", "جميل", "جلال", "كرم", "مراد", "ماجد", "وجدي", "وجدى", "وحيد", 
     "ظافر", "شفيق", "رفيق", "صبحي", "صبخى", "طاهر", "طلعت", "عاطف", "عقيل", "عمران", "عوض", "عيسى", "غالي", "غالى", 
     "غريب", "faiy", "فايز", "فاروق", "فضل", "فيصل", "قاسم", "قطب", "كامل", "metwally", "متولي", "متولى", "محسن", "محفوظ", "مختار", "مروان", 
@@ -69,19 +93,6 @@ def autocorrect_arabic_name(name):
                     best_match = common_name
             corrected_words.append(best_match)
     return " ".join(corrected_words).strip()
-
-def sauvola_threshold_fast(gray_img, window_size, k=0.15, R=128):
-    if window_size % 2 == 0:
-        window_size += 1
-    gray = gray_img.astype(np.float32)
-    mean = cv2.boxFilter(gray, -1, (window_size, window_size))
-    sq_mean = cv2.boxFilter(gray * gray, -1, (window_size, window_size))
-    variance = sq_mean - (mean * mean)
-    variance = np.maximum(variance, 0)
-    std_dev = np.sqrt(variance)
-    threshold = mean * (1.0 + k * (std_dev / R - 1.0))
-    binary = np.where(gray >= threshold, 255, 0).astype(np.uint8)
-    return binary
 
 def dynamic_ocr_preprocess(bgr_image):
     if bgr_image is None or bgr_image.size == 0:
@@ -121,18 +132,18 @@ def dynamic_ocr_preprocess(bgr_image):
     sigma_space = int(w * 0.1)
     denoised = cv2.bilateralFilter(enhanced, d=7, sigmaColor=sigma_color, sigmaSpace=sigma_space)
 
-    # 5. Otsu's Thresholding (Swapped from Sauvola to handle patterned background cleaner)
+    # 5. Otsu's Thresholding
     blurred = cv2.GaussianBlur(denoised, (5, 5), 0)
     _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-    # 6. Text Dilation: Erode the binary mask (since text is 0/black) to thicken character strokes
+    # 6. Text Dilation: Erode the binary mask (since text is 0/black)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
     binary = cv2.erode(binary, kernel, iterations=1)
 
     # 7. Grayscale Gradient Blend: Merge binary mask back with CLAHE-enhanced grayscale
     blended = np.where(binary == 0, denoised, 255).astype(np.uint8)
     
-    # 8. Median Filter: Wipe out salt-and-pepper noise while keeping text edges sharp
+    # 8. Median Filter
     blended = cv2.medianBlur(blended, 3)
 
     # 9. Add Generous White Border Padding
@@ -149,9 +160,6 @@ def dynamic_ocr_preprocess(bgr_image):
     return cv2.cvtColor(padded, cv2.COLOR_GRAY2BGR)
 
 def is_digit_block(text):
-    """
-    Check if a text block contains solely digits or number characters (Arabic-Indic or standard).
-    """
     cleaned = re.sub(r'\s+', '', text)
     return all(c.isdigit() or c in '٠١٢٣٤٥٦٧٨٩/-' for c in cleaned)
 
@@ -191,10 +199,7 @@ def sort_arabic_ocr_results(results):
         
     sorted_texts = []
     for line in lines:
-        # Sort each line from right to left (descending x_center)
         line.sort(key=lambda item: item["x_center"], reverse=True)
-        
-        # Group consecutive digit blocks and reverse them (since numbers are Left-to-Right)
         i = 0
         n = len(line)
         while i < n:
@@ -212,9 +217,6 @@ def sort_arabic_ocr_results(results):
     return sorted_texts
 
 def pad_bbox(bbox, pad_x=20, pad_y=5, image_shape=None):
-    """
-    Pad crop bounding box to prevent edge letters from being sliced off.
-    """
     x1, y1, x2, y2 = bbox
     h, w = image_shape[:2]
     new_x1 = max(0, x1 - pad_x)
@@ -227,7 +229,7 @@ def preprocess_image(cropped_image):
     return dynamic_ocr_preprocess(cropped_image)
 
 def extract_text(image, bbox, field_name):
-    # Apply dynamic bounding box padding to avoid cutting off edge letters
+    # Apply dynamic bounding box padding
     padded_bbox = pad_bbox(bbox, pad_x=20, pad_y=5, image_shape=image.shape)
     x1, y1, x2, y2 = padded_bbox
     cropped_image = image[y1:y2, x1:x2]
@@ -243,6 +245,33 @@ def extract_text(image, bbox, field_name):
     # Save preprocessed/binarized crop for Streamlit visualization
     cv2.imwrite(f'output/{field_name}_processed.jpg', preprocessed_image)
     
+    # Use custom model if loaded successfully
+    if custom_model is not None:
+        try:
+            gray = cv2.cvtColor(preprocessed_image, cv2.COLOR_BGR2GRAY)
+            target_w, target_h = 256, 64
+            img_resized = cv2.resize(gray, (target_w, target_h), interpolation=cv2.INTER_AREA)
+            img_normalized = (img_resized.astype(np.float32) / 127.5) - 1.0
+            img_tensor = torch.tensor(img_normalized, dtype=torch.float32).unsqueeze(0).unsqueeze(0) # [1, 1, H, W]
+            
+            with torch.no_grad():
+                outputs = custom_model(img_tensor)
+                
+            arg_maxes = torch.argmax(outputs, dim=2).squeeze(1).tolist()
+            decoded_indices = []
+            prev_idx = -1
+            for idx in arg_maxes:
+                if idx != prev_idx:
+                    if idx != 0:
+                        decoded_indices.append(idx)
+                    prev_idx = idx
+            text = "".join(IDX_TO_CHAR.get(idx, "") for idx in decoded_indices).strip()
+            if text:
+                return text
+        except Exception as e:
+            print(f"Fallback to EasyOCR due to custom prediction error: {e}")
+            
+    # Fallback / Default: EasyOCR
     results = reader.readtext(
         preprocessed_image, 
         detail=1, 
@@ -257,7 +286,7 @@ def extract_text(image, bbox, field_name):
     return text
 
 def detect_national_id(cropped_image):
-    model = YOLO('detect_id.pt')  # Load the model directly in the function
+    model = YOLO('detect_id.pt')
     best_id = ""
     closest_diff = 999
     
@@ -301,12 +330,12 @@ def expand_bbox_height(bbox, scale=1.2, image_shape=None):
 def decode_egyptian_id(id_number):
     governorates = {
         '01': 'Cairo', '02': 'Alexandria', '03': 'Port Said', '04': 'Suez',
-        '11': 'Damietta', '12': 'Dakahlia', '13': 'Ash Sharqia', '14': 'Kaliobeya',
-        '15': 'Kafr El - Sheikh', '16': 'Gharbia', '17': 'Monoufia', '18': 'El Beheira',
+        '11': 'Damietta', '12': 'Dakahlia', '13': 'Sharqia', '14': 'Qalyubia',
+        '15': 'Kafr El Sheikh', '16': 'Gharbia', '17': 'Menoufia', '18': 'Beheira',
         '19': 'Ismailia', '21': 'Giza', '22': 'Beni Suef', '23': 'Fayoum',
-        '24': 'El Menia', '25': 'Assiut', '26': 'Sohag', '27': 'Qena',
+        '24': 'Minya', '25': 'Assiut', '26': 'Sohag', '27': 'Qena',
         '28': 'Aswan', '29': 'Luxor', '31': 'Red Sea', '32': 'New Valley',
-        '33': 'Matrouh', '34': 'North Sinai', '35': 'South Sinai', '88': 'Foreign'
+        '33': 'Matrouh', '34': 'North Sinai', '35': 'South Sinai', '88': 'Foreign-born'
     }
     
     # Normalize ID digits and characters
