@@ -38,3 +38,8 @@ venv.bak/
 output/
 *.log
 d2.jpg
+
+# ML trainer dataset and weight files
+trainer/dataset/
+trainer/*.pth
+trainer/*.pt
