@@ -88,6 +88,7 @@ def dynamic_ocr_preprocess(bgr_image):
         return bgr_image
     h, w = bgr_image.shape[:2]
     
+    # 1. Dynamic Color Channel Selection
     b, g, r = cv2.split(bgr_image)
     b_var = cv2.Laplacian(b, cv2.CV_64F).var()
     g_var = cv2.Laplacian(g, cv2.CV_64F).var()
@@ -99,30 +100,43 @@ def dynamic_ocr_preprocess(bgr_image):
     elif r_var > b_var and r_var > g_var:
         best_channel = r
         
+    # 2. Local Contrast Preservation via CLAHE (Safe clip limit to boost faint ink/dots)
+    clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
+    contrast_enhanced = clahe.apply(best_channel)
+        
+    # 3. Dynamic Resolution Upscaling
     target_h = 96
     scale_factor = 1.0
     if h < target_h:
         scale_factor = target_h / h
         
     if scale_factor > 1.0:
-        enhanced = cv2.resize(best_channel, (0, 0), fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_CUBIC)
+        enhanced = cv2.resize(contrast_enhanced, (0, 0), fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_CUBIC)
         h, w = enhanced.shape[:2]
     else:
-        enhanced = best_channel.copy()
+        enhanced = contrast_enhanced.copy()
 
+    # 4. Edge-Preserving Bilateral Noise Filter
     sigma_color = int(w * 0.1)
     sigma_space = int(w * 0.1)
     denoised = cv2.bilateralFilter(enhanced, d=7, sigmaColor=sigma_color, sigmaSpace=sigma_space)
 
-    window_size = int(w / 15)
+    # 5. Less Aggressive Sauvola Thresholding (Smaller window, lower k to keep faint dots)
+    window_size = int(w / 20)
     if window_size % 2 == 0:
         window_size += 1
     window_size = max(9, window_size)
-    binary = sauvola_threshold_fast(denoised, window_size=window_size, k=0.15)
+    
+    # Using k=0.10 to keep thinner, faint text details
+    binary = sauvola_threshold_fast(denoised, window_size=window_size, k=0.10)
 
+    # 6. Grayscale Gradient Blend: Merge binary mask back with CLAHE-enhanced grayscale
     blended = np.where(binary == 0, denoised, 255).astype(np.uint8)
+    
+    # Soften edges slightly
     blended = cv2.GaussianBlur(blended, (3, 3), 0)
 
+    # 7. Add Generous White Border Padding
     padding = 25
     padded = cv2.copyMakeBorder(
         blended, 
