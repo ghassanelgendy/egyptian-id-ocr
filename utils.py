@@ -37,7 +37,7 @@ COMMON_ARABIC_NAMES = {
     "فتحي", "فتحى", "فرج", "طه", "يحيي", "زكريا", "أشرف", "اشرف", "أمجد", "امجد", "أكرم", "اكرم", "أنور", "انور", 
     "إيهاب", "ايهاب", "وائل", "سامر", "إسلام", "اسلام", "أمير", "امير", "زياد", "عبدالرحمن", "عبدالرحيم", "عبدالعزيز", 
     "عبدالحميد", "عبدالمجيد", "عبدالقادر", "عبداللطيف", "عبدالحليم", "عبدالسلام", "عبدالوهاب", "عبدالفتاح", "عبدالله", 
-    "عبدالقوى", "عبدالهادي", "سيد", "صبري", "صبرى", "شوقي", "شوقى", "لطفي", "لطفى", "فهمي", "فهمى", "حلمي", "حلمى", 
+    "عبدالقوى", "عبدالهادي", "سيد", "صبري", "صبرى", "شوقي", "شوقى", "لطفي", "لطفى", "فهمي", "فهمى", "حلمي", "hassan", "حلمى", 
     "رمزي", "رمزى", "نجيب", "منير", "سمير", "نبيل", "جميل", "جلال", "كرم", "مراد", "ماجد", "وجدي", "وجدى", "وحيد", 
     "ظافر", "شفيق", "رفيق", "صبحي", "صبخى", "طاهر", "طلعت", "عاطف", "عقيل", "عمران", "عوض", "عيسى", "غالي", "غالى", 
     "غريب", "faiy", "فايز", "فاروق", "فضل", "فيصل", "قاسم", "قطب", "كامل", "metwally", "متولي", "متولى", "محسن", "محفوظ", "مختار", "مروان", 
@@ -70,19 +70,6 @@ def autocorrect_arabic_name(name):
             corrected_words.append(best_match)
     return " ".join(corrected_words).strip()
 
-def sauvola_threshold_fast(gray_img, window_size, k=0.15, R=128):
-    if window_size % 2 == 0:
-        window_size += 1
-    gray = gray_img.astype(np.float32)
-    mean = cv2.boxFilter(gray, -1, (window_size, window_size))
-    sq_mean = cv2.boxFilter(gray * gray, -1, (window_size, window_size))
-    variance = sq_mean - (mean * mean)
-    variance = np.maximum(variance, 0)
-    std_dev = np.sqrt(variance)
-    threshold = mean * (1.0 + k * (std_dev / R - 1.0))
-    binary = np.where(gray >= threshold, 255, 0).astype(np.uint8)
-    return binary
-
 def dynamic_ocr_preprocess(bgr_image):
     if bgr_image is None or bgr_image.size == 0:
         return bgr_image
@@ -100,7 +87,7 @@ def dynamic_ocr_preprocess(bgr_image):
     elif r_var > b_var and r_var > g_var:
         best_channel = r
         
-    # 2. Local Contrast Preservation via CLAHE (Safe clip limit to boost faint ink/dots)
+    # 2. Local Contrast Preservation via CLAHE
     clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
     contrast_enhanced = clahe.apply(best_channel)
         
@@ -121,22 +108,21 @@ def dynamic_ocr_preprocess(bgr_image):
     sigma_space = int(w * 0.1)
     denoised = cv2.bilateralFilter(enhanced, d=7, sigmaColor=sigma_color, sigmaSpace=sigma_space)
 
-    # 5. Less Aggressive Sauvola Thresholding (Smaller window, lower k to keep faint dots)
-    window_size = int(w / 20)
-    if window_size % 2 == 0:
-        window_size += 1
-    window_size = max(9, window_size)
-    
-    # Using k=0.10 to keep thinner, faint text details
-    binary = sauvola_threshold_fast(denoised, window_size=window_size, k=0.10)
+    # 5. Otsu's Thresholding (Swapped from Sauvola to handle patterned background cleaner)
+    blurred = cv2.GaussianBlur(denoised, (5, 5), 0)
+    _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-    # 6. Grayscale Gradient Blend: Merge binary mask back with CLAHE-enhanced grayscale
+    # 6. Text Dilation: Erode the binary mask (since text is 0/black) to thicken character strokes
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+    binary = cv2.erode(binary, kernel, iterations=1)
+
+    # 7. Grayscale Gradient Blend: Merge binary mask back with CLAHE-enhanced grayscale
     blended = np.where(binary == 0, denoised, 255).astype(np.uint8)
     
-    # Soften edges slightly
-    blended = cv2.GaussianBlur(blended, (3, 3), 0)
+    # 8. Median Filter: Wipe out salt-and-pepper noise while keeping text edges sharp
+    blended = cv2.medianBlur(blended, 3)
 
-    # 7. Add Generous White Border Padding
+    # 9. Add Generous White Border Padding
     padding = 25
     padded = cv2.copyMakeBorder(
         blended, 
