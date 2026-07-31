@@ -36,7 +36,7 @@ COMMON_ARABIC_NAMES = {
     "حازم", "حاتم", "نادر", "ناجي", "ناجى", "باسم", "باسل", "ماهر", "عاصم", "فؤاد", "فريد", "fawzy", "فوزي", "فوزى", 
     "فتحي", "فتحى", "فرج", "طه", "يحيي", "زكريا", "أشرف", "اشرف", "أمجد", "امجد", "أكرم", "اكرم", "أنور", "انور", 
     "إيهاب", "ايهاب", "وائل", "سامر", "إسلام", "اسلام", "أمير", "امير", "زياد", "عبدالرحمن", "عبدالرحيم", "عبدالعزيز", 
-    "عبدالحميد", "عبدالمجيد", "عبدالقادر", "عبداللطيف", "عبدالحليم", "عبدالسلام", "عبدالوهاب", "عبدالفتاح", "عبدالله", 
+    "عبدالحميد", "عبدالمجيد", "عبدالقادر", "عبداللطيف", "عبدالحليم", "عبدالسلام", "عبدالوهاب", "عبدالعال", "عبدالفتاح", "عبدالله", 
     "عبدالقوى", "عبدالهادي", "سيد", "صبري", "صبرى", "شوقي", "شوقى", "لطفي", "لطفى", "فهمي", "فهمى", "حلمي", "hassan", "حلمى", 
     "رمزي", "رمزى", "نجيب", "منير", "سمير", "نبيل", "جميل", "جلال", "كرم", "مراد", "ماجد", "وجدي", "وجدى", "وحيد", 
     "ظافر", "شفيق", "رفيق", "صبحي", "صبخى", "طاهر", "طلعت", "عاطف", "عقيل", "عمران", "عوض", "عيسى", "غالي", "غالى", 
@@ -69,6 +69,19 @@ def autocorrect_arabic_name(name):
                     best_match = common_name
             corrected_words.append(best_match)
     return " ".join(corrected_words).strip()
+
+def sauvola_threshold_fast(gray_img, window_size, k=0.15, R=128):
+    if window_size % 2 == 0:
+        window_size += 1
+    gray = gray_img.astype(np.float32)
+    mean = cv2.boxFilter(gray, -1, (window_size, window_size))
+    sq_mean = cv2.boxFilter(gray * gray, -1, (window_size, window_size))
+    variance = sq_mean - (mean * mean)
+    variance = np.maximum(variance, 0)
+    std_dev = np.sqrt(variance)
+    threshold = mean * (1.0 + k * (std_dev / R - 1.0))
+    binary = np.where(gray >= threshold, 255, 0).astype(np.uint8)
+    return binary
 
 def dynamic_ocr_preprocess(bgr_image):
     if bgr_image is None or bgr_image.size == 0:
@@ -135,6 +148,13 @@ def dynamic_ocr_preprocess(bgr_image):
     )
     return cv2.cvtColor(padded, cv2.COLOR_GRAY2BGR)
 
+def is_digit_block(text):
+    """
+    Check if a text block contains solely digits or number characters (Arabic-Indic or standard).
+    """
+    cleaned = re.sub(r'\s+', '', text)
+    return all(c.isdigit() or c in '٠١٢٣٤٥٦٧٨٩/-' for c in cleaned)
+
 def sort_arabic_ocr_results(results):
     if not results:
         return []
@@ -168,17 +188,48 @@ def sort_arabic_ocr_results(results):
                 current_line = [item]
     if current_line:
         lines.append(current_line)
+        
     sorted_texts = []
     for line in lines:
+        # Sort each line from right to left (descending x_center)
         line.sort(key=lambda item: item["x_center"], reverse=True)
+        
+        # Group consecutive digit blocks and reverse them (since numbers are Left-to-Right)
+        i = 0
+        n = len(line)
+        while i < n:
+            if is_digit_block(line[i]["text"]):
+                j = i
+                while j < n and is_digit_block(line[j]["text"]):
+                    j += 1
+                if j - i > 1:
+                    line[i:j] = reversed(line[i:j])
+                i = j
+            else:
+                i += 1
+                
         sorted_texts.append(" ".join(item["text"] for item in line))
     return sorted_texts
+
+def pad_bbox(bbox, pad_x=20, pad_y=5, image_shape=None):
+    """
+    Pad crop bounding box to prevent edge letters from being sliced off.
+    """
+    x1, y1, x2, y2 = bbox
+    h, w = image_shape[:2]
+    new_x1 = max(0, x1 - pad_x)
+    new_y1 = max(0, y1 - pad_y)
+    new_x2 = min(w, x2 + pad_x)
+    new_y2 = min(h, y2 + pad_y)
+    return [new_x1, new_y1, new_x2, new_y2]
 
 def preprocess_image(cropped_image):
     return dynamic_ocr_preprocess(cropped_image)
 
 def extract_text(image, bbox, field_name):
-    x1, y1, x2, y2 = bbox
+    # Apply dynamic bounding box padding to avoid cutting off edge letters
+    padded_bbox = pad_bbox(bbox, pad_x=20, pad_y=5, image_shape=image.shape)
+    x1, y1, x2, y2 = padded_bbox
     cropped_image = image[y1:y2, x1:x2]
     if cropped_image.size == 0:
         return ""
