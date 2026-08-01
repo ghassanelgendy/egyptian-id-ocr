@@ -17,13 +17,14 @@ selected_tab = st.sidebar.radio("Navigation", tabs)
 
 # Selection of Recognition model weights
 st.sidebar.markdown("---")
-st.sidebar.markdown("### OCR Recognition Weights")
+st.sidebar.markdown("### OCR Recognition Engine")
 engine_option = st.sidebar.radio(
-    "Select Model Weights:",
-    ["Default EasyOCR", "Custom Fine-Tuned CRNN"],
+    "Select Model Engine:",
+    ["Default EasyOCR", "Custom Fine-Tuned CRNN", "PaddleOCR (PP-OCRv5)"],
     index=0
 )
 use_custom = (engine_option == "Custom Fine-Tuned CRNN")
+use_paddle = (engine_option == "PaddleOCR (PP-OCRv5)")
 
 # Update the session state with the selected tab
 st.session_state.current_tab = selected_tab
@@ -59,7 +60,11 @@ if st.session_state.current_tab == "Home":
 
         try:
             # Call the detect_and_process_id_card function with custom weights toggle
-            first_name, second_name, Full_name, national_id, address, birth, gov, gender = detect_and_process_id_card(temp_file_path, use_custom=use_custom)
+            first_name, second_name, Full_name, national_id, address, birth, gov, gender = detect_and_process_id_card(
+                temp_file_path, 
+                use_custom=use_custom, 
+                use_paddle=use_paddle
+            )
             
             # Show the cropped card image detected by YOLO
             st.image(Image.open("d2.jpg"), caption="Cropped Card Bounding Box", use_container_width=True)

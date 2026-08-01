@@ -112,7 +112,7 @@ def dynamic_ocr_preprocess(bgr_image):
         best_channel = r
         
     # 2. Local Contrast Preservation via CLAHE
-    clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     contrast_enhanced = clahe.apply(best_channel)
         
     # 3. Dynamic Resolution Upscaling
@@ -128,25 +128,12 @@ def dynamic_ocr_preprocess(bgr_image):
         enhanced = contrast_enhanced.copy()
 
     # 4. Edge-Preserving Bilateral Noise Filter
-    sigma_color = int(w * 0.1)
-    sigma_space = int(w * 0.1)
-    denoised = cv2.bilateralFilter(enhanced, d=7, sigmaColor=sigma_color, sigmaSpace=sigma_space)
+    denoised = cv2.bilateralFilter(enhanced, d=9, sigmaColor=75, sigmaSpace=75)
 
-    # 5. Otsu's Thresholding
-    blurred = cv2.GaussianBlur(denoised, (5, 5), 0)
-    _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-    # 6. Text Dilation: Erode the binary mask (since text is 0/black)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-    binary = cv2.erode(binary, kernel, iterations=1)
-
-    # 7. Grayscale Gradient Blend: Merge binary mask back with CLAHE-enhanced grayscale
-    blended = np.where(binary == 0, denoised, 255).astype(np.uint8)
-    
-    # 8. Add Generous White Border Padding (NO Median Blur to prevent fuzzy details)
+    # 5. Add White Padding
     padding = 25
     padded = cv2.copyMakeBorder(
-        blended, 
+        denoised, 
         top=padding, 
         bottom=padding, 
         left=padding, 
@@ -225,7 +212,7 @@ def pad_bbox(bbox, pad_x=20, pad_y=5, image_shape=None):
 def preprocess_image(cropped_image):
     return dynamic_ocr_preprocess(cropped_image)
 
-def extract_text(image, bbox, field_name, use_custom=False):
+def extract_text(image, bbox, field_name, use_custom=False, use_paddle=False):
     # Apply dynamic bounding box padding
     padded_bbox = pad_bbox(bbox, pad_x=20, pad_y=5, image_shape=image.shape)
     x1, y1, x2, y2 = padded_bbox
@@ -239,17 +226,37 @@ def extract_text(image, bbox, field_name, use_custom=False):
     
     preprocessed_image = preprocess_image(cropped_image)
     
-    # Save preprocessed/binarized crop for Streamlit visualization
+    # Save preprocessed crop for Streamlit visualization
     cv2.imwrite(f'output/{field_name}_processed.jpg', preprocessed_image)
     
-    # Use custom model if loaded successfully AND use_custom is toggled
+    # Mode 1: PaddleOCR (PP-OCRv5 via isolated environment)
+    if use_paddle:
+        try:
+            import subprocess
+            processed_path = f'output/{field_name}_processed.jpg'
+            container_processed_path = os.path.abspath(processed_path)
+            
+            result = subprocess.run(
+                ['/home/frappe/frappe-bench/paddle_env/bin/python', 
+                 '/home/frappe/frappe-bench/ocr_egyptian_ID/paddle_predict.py', 
+                 container_processed_path],
+                capture_output=True,
+                text=True
+            )
+            text = result.stdout.strip()
+            if text:
+                return text
+        except Exception as e:
+            print(f"Fallback to EasyOCR due to PaddleOCR error: {e}")
+            
+    # Mode 2: Custom fine-tuned CRNN weights
     if use_custom and custom_model is not None:
         try:
             gray = cv2.cvtColor(preprocessed_image, cv2.COLOR_BGR2GRAY)
             target_w, target_h = 256, 64
             img_resized = cv2.resize(gray, (target_w, target_h), interpolation=cv2.INTER_AREA)
             img_normalized = (img_resized.astype(np.float32) / 127.5) - 1.0
-            img_tensor = torch.tensor(img_normalized, dtype=torch.float32).unsqueeze(0).unsqueeze(0) # [1, 1, H, W]
+            img_tensor = torch.tensor(img_normalized, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
             
             with torch.no_grad():
                 outputs = custom_model(img_tensor)
@@ -268,13 +275,13 @@ def extract_text(image, bbox, field_name, use_custom=False):
         except Exception as e:
             print(f"Fallback to EasyOCR due to custom prediction error: {e}")
             
-    # Fallback / Default: EasyOCR
+    # Fallback / Default Mode: EasyOCR (with increased decoding search width)
     results = reader.readtext(
         preprocessed_image, 
         detail=1, 
         paragraph=False,
         decoder='beamsearch',
-        beamWidth=5,
+        beamWidth=10,
         contrast_ths=0.1,
         adjust_contrast=False
     )
@@ -381,7 +388,7 @@ def decode_egyptian_id(id_number):
         'Gender': gender
     }
 
-def process_image(cropped_image, use_custom=False):
+def process_image(cropped_image, use_custom=False, use_paddle=False):
     model = YOLO('detect_odjects.pt')
     results = model(cropped_image)
 
@@ -403,15 +410,15 @@ def process_image(cropped_image, use_custom=False):
             bbox = [int(coord) for coord in bbox]
 
             if class_name == 'firstName':
-                first_name = extract_text(cropped_image, bbox, 'firstName', use_custom=use_custom)
+                first_name = extract_text(cropped_image, bbox, 'firstName', use_custom=use_custom, use_paddle=use_paddle)
                 first_name = autocorrect_arabic_name(first_name)
             elif class_name == 'lastName':
-                second_name = extract_text(cropped_image, bbox, 'lastName', use_custom=use_custom)
+                second_name = extract_text(cropped_image, bbox, 'lastName', use_custom=use_custom, use_paddle=use_paddle)
                 second_name = autocorrect_arabic_name(second_name)
             elif class_name == 'serial':
-                serial = extract_text(cropped_image, bbox, 'serial', use_custom=use_custom)
+                serial = extract_text(cropped_image, bbox, 'serial', use_custom=use_custom, use_paddle=use_paddle)
             elif class_name == 'address':
-                address = extract_text(cropped_image, bbox, 'address', use_custom=use_custom)
+                address = extract_text(cropped_image, bbox, 'address', use_custom=use_custom, use_paddle=use_paddle)
             elif class_name == 'nid':
                 expanded_bbox = expand_bbox_height(bbox, scale=1.5, image_shape=cropped_image.shape)
                 cropped_nid = cropped_image[expanded_bbox[1]:expanded_bbox[3], expanded_bbox[0]:expanded_bbox[2]]
@@ -424,7 +431,7 @@ def process_image(cropped_image, use_custom=False):
     decoded_info = decode_egyptian_id(nid)
     return (first_name, second_name, merged_name, nid, address, decoded_info["Birth Date"], decoded_info["Governorate"], decoded_info["Gender"])
 
-def detect_and_process_id_card(image_path, use_custom=False):
+def detect_and_process_id_card(image_path, use_custom=False, use_paddle=False):
     id_card_model = YOLO('detect_id_card.pt')
     id_card_results = id_card_model(image_path)
     image = cv2.imread(image_path)
@@ -436,4 +443,4 @@ def detect_and_process_id_card(image_path, use_custom=False):
             cropped_image = image[y1:y2, x1:x2]
             break
             
-    return process_image(cropped_image, use_custom=use_custom)
+    return process_image(cropped_image, use_custom=use_custom, use_paddle=use_paddle)
