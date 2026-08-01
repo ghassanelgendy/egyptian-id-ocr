@@ -64,7 +64,7 @@ COMMON_ARABIC_NAMES = {
     "عبدالقوى", "عبدالهادي", "سيد", "صبري", "صبرى", "شوقي", "شوقى", "لطفي", "لطفى", "faiy", "فهمي", "فهمى", "حلمي", "hassan", "حلمى", 
     "رمزي", "رمزى", "نجيب", "منير", "سمير", "نبيل", "جميل", "جلال", "كرم", "مراد", "ماجد", "وجدي", "وجدى", "وحيد", 
     "ظافر", "شفيق", "رفيق", "صبحي", "صبخى", "طاهر", "طلعت", "عاطف", "عقيل", "عمران", "عوض", "عيسى", "غالي", "غالى", 
-    "غريب", "faiy", "فايز", "فاروق", "فضل", "فيصل", "قاسم", "قطب", "كامل", "metwally", "متولي", "متولى", "محسن", "محفوظ", "مختار", "مروان", 
+    "غريب", "faiy", "فايز", "فاروق", "فضل", "فيصل", "قاسم", "قطب", "كامل", "metwally", "متولي", "metwally", "متولى", "محسن", "محفوظ", "مختار", "مروان", 
     "مظهر", "معتز", "معوض", "منصور", "مهدي", "مهدى", "ناصف", "نصار", "نصر", "نعمان", "نعيم", "نهاد", "نور", "هادي", 
     # Female names
     "فاطمة", "فاطمه", "عائشة", "عائشه", "خديجة", "خديجه", "زينب", "رقية", "رقيه", "مريم", "سارة", "sara", "ساره", "منى", "منة", "منه",
@@ -143,10 +143,7 @@ def dynamic_ocr_preprocess(bgr_image):
     # 7. Grayscale Gradient Blend: Merge binary mask back with CLAHE-enhanced grayscale
     blended = np.where(binary == 0, denoised, 255).astype(np.uint8)
     
-    # 8. Median Filter
-    blended = cv2.medianBlur(blended, 3)
-
-    # 9. Add Generous White Border Padding
+    # 8. Add Generous White Border Padding (NO Median Blur to prevent fuzzy details)
     padding = 25
     padded = cv2.copyMakeBorder(
         blended, 
@@ -228,7 +225,7 @@ def pad_bbox(bbox, pad_x=20, pad_y=5, image_shape=None):
 def preprocess_image(cropped_image):
     return dynamic_ocr_preprocess(cropped_image)
 
-def extract_text(image, bbox, field_name):
+def extract_text(image, bbox, field_name, use_custom=False):
     # Apply dynamic bounding box padding
     padded_bbox = pad_bbox(bbox, pad_x=20, pad_y=5, image_shape=image.shape)
     x1, y1, x2, y2 = padded_bbox
@@ -245,8 +242,8 @@ def extract_text(image, bbox, field_name):
     # Save preprocessed/binarized crop for Streamlit visualization
     cv2.imwrite(f'output/{field_name}_processed.jpg', preprocessed_image)
     
-    # Use custom model if loaded successfully
-    if custom_model is not None:
+    # Use custom model if loaded successfully AND use_custom is toggled
+    if use_custom and custom_model is not None:
         try:
             gray = cv2.cvtColor(preprocessed_image, cv2.COLOR_BGR2GRAY)
             target_w, target_h = 256, 64
@@ -384,7 +381,7 @@ def decode_egyptian_id(id_number):
         'Gender': gender
     }
 
-def process_image(cropped_image):
+def process_image(cropped_image, use_custom=False):
     model = YOLO('detect_odjects.pt')
     results = model(cropped_image)
 
@@ -406,15 +403,15 @@ def process_image(cropped_image):
             bbox = [int(coord) for coord in bbox]
 
             if class_name == 'firstName':
-                first_name = extract_text(cropped_image, bbox, 'firstName')
+                first_name = extract_text(cropped_image, bbox, 'firstName', use_custom=use_custom)
                 first_name = autocorrect_arabic_name(first_name)
             elif class_name == 'lastName':
-                second_name = extract_text(cropped_image, bbox, 'lastName')
+                second_name = extract_text(cropped_image, bbox, 'lastName', use_custom=use_custom)
                 second_name = autocorrect_arabic_name(second_name)
             elif class_name == 'serial':
-                serial = extract_text(cropped_image, bbox, 'serial')
+                serial = extract_text(cropped_image, bbox, 'serial', use_custom=use_custom)
             elif class_name == 'address':
-                address = extract_text(cropped_image, bbox, 'address')
+                address = extract_text(cropped_image, bbox, 'address', use_custom=use_custom)
             elif class_name == 'nid':
                 expanded_bbox = expand_bbox_height(bbox, scale=1.5, image_shape=cropped_image.shape)
                 cropped_nid = cropped_image[expanded_bbox[1]:expanded_bbox[3], expanded_bbox[0]:expanded_bbox[2]]
@@ -427,7 +424,7 @@ def process_image(cropped_image):
     decoded_info = decode_egyptian_id(nid)
     return (first_name, second_name, merged_name, nid, address, decoded_info["Birth Date"], decoded_info["Governorate"], decoded_info["Gender"])
 
-def detect_and_process_id_card(image_path):
+def detect_and_process_id_card(image_path, use_custom=False):
     id_card_model = YOLO('detect_id_card.pt')
     id_card_results = id_card_model(image_path)
     image = cv2.imread(image_path)
@@ -439,4 +436,4 @@ def detect_and_process_id_card(image_path):
             cropped_image = image[y1:y2, x1:x2]
             break
             
-    return process_image(cropped_image)
+    return process_image(cropped_image, use_custom=use_custom)
