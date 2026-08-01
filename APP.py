@@ -26,6 +26,13 @@ engine_option = st.sidebar.radio(
 use_custom = (engine_option == "Custom Fine-Tuned CRNN")
 use_paddle = (engine_option == "PaddleOCR (PP-OCRv5)")
 
+# Toggle to apply smart adaptive binarization (variable threshold per box)
+apply_binarization = st.sidebar.checkbox(
+    "Apply Smart Binarization",
+    value=False,
+    help="Applies variable local adaptive binarization per box instead of clean grayscale."
+)
+
 # Update the session state with the selected tab
 st.session_state.current_tab = selected_tab
 
@@ -63,7 +70,8 @@ if st.session_state.current_tab == "Home":
             first_name, second_name, Full_name, national_id, address, birth, gov, gender = detect_and_process_id_card(
                 temp_file_path, 
                 use_custom=use_custom, 
-                use_paddle=use_paddle
+                use_paddle=use_paddle,
+                binarize=apply_binarization
             )
             
             # Show the cropped card image detected by YOLO
